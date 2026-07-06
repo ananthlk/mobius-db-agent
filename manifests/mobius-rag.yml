@@ -1,0 +1,8 @@
+service: mobius-rag
+permissions:
+  rag:
+    read: ["*"]
+    write: ["*"]
+limits:
+  max_rows: 10000
+  timeout_seconds: 60

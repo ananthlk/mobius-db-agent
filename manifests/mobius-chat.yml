@@ -1,0 +1,14 @@
+service: mobius-chat
+permissions:
+  chat:
+    read: ["*"]
+    write: ["*"]
+  rag:
+    read: [rag_published_embeddings, documents, hierarchical_chunks]
+    write: []
+  user:
+    read: [app_user, user_session, auth_provider_link, tenant, role]
+    write: []
+limits:
+  max_rows: 10000
+  timeout_seconds: 30

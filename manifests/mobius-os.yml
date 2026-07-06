@@ -1,0 +1,11 @@
+service: mobius-os
+permissions:
+  chat:
+    read: ["*"]
+    write: ["*"]
+  user:
+    read: ["*"]
+    write: [app_user, user_session, user_preference]
+limits:
+  max_rows: 10000
+  timeout_seconds: 30

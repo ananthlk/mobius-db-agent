@@ -1,0 +1,8 @@
+service: task-manager
+permissions:
+  chat:
+    read: [mobius_task, migrations_applied]
+    write: [mobius_task, migrations_applied]
+limits:
+  max_rows: 5000
+  timeout_seconds: 15
