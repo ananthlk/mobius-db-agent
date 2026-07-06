@@ -19,6 +19,7 @@ _HOST = os.environ.get("HOST", "0.0.0.0")
 mcp = FastMCP(
     "Mobius DB Agent",
     json_response=True,
+    stateless_http=True,
     host=_HOST,
     port=_PORT,
 )

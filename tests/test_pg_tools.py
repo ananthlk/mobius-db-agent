@@ -73,31 +73,30 @@ class TestDbQuery:
     def test_rejects_write_sql(self):
         from app.tools.pg_tools import db_query
         result = json.loads(db_query("DELETE FROM allowed_table", "testdb", "test-svc"))
-        assert "error" in result
-        assert "db_execute" in result["error"]
+        assert result["error"]["code"] == "readonly_violation"
+        assert "db_execute" in result["error"]["message"]
 
     def test_rejects_empty_sql(self):
         from app.tools.pg_tools import db_query
         result = json.loads(db_query("", "testdb", "test-svc"))
-        assert "error" in result
+        assert result["error"]["code"] == "invalid_input"
 
     def test_rejects_unknown_database(self):
         from app.tools.pg_tools import db_query
         result = json.loads(db_query("SELECT 1", "nonexistent", "test-svc"))
-        assert "error" in result
-        assert "Unknown database" in result["error"]
+        assert result["error"]["code"] == "invalid_input"
+        assert "Unknown database" in result["error"]["message"]
 
     def test_access_denied_for_table(self):
         from app.tools.pg_tools import db_query
         result = json.loads(db_query("SELECT * FROM forbidden_table", "testdb", "test-svc"))
-        assert "error" in result
-        assert "Access denied" in result["error"]
+        assert result["error"]["code"] == "access_denied"
+        assert result["error"]["table"] == "forbidden_table"
 
     def test_access_denied_for_unknown_caller(self):
         from app.tools.pg_tools import db_query
         result = json.loads(db_query("SELECT * FROM allowed_table", "testdb", "nobody"))
-        assert "error" in result
-        assert "Access denied" in result["error"]
+        assert result["error"]["code"] == "access_denied"
 
     def test_admin_can_read_anything(self):
         from app.tools.pg_tools import db_query
@@ -163,13 +162,13 @@ class TestDbExecute:
     def test_rejects_select(self):
         from app.tools.pg_tools import db_execute
         result = json.loads(db_execute("SELECT * FROM allowed_table", "testdb", "test-svc"))
-        assert "error" in result
-        assert "db_query" in result["error"]
+        assert result["error"]["code"] == "readonly_violation"
+        assert "db_query" in result["error"]["message"]
 
     def test_rejects_ddl(self):
         from app.tools.pg_tools import db_execute
         result = json.loads(db_execute("DROP TABLE allowed_table", "testdb", "test-svc"))
-        assert "error" in result
+        assert result["error"]["code"] == "ddl_forbidden"
 
     def test_write_access_denied(self):
         from app.tools.pg_tools import db_execute
@@ -178,13 +177,13 @@ class TestDbExecute:
             "INSERT INTO users (name) VALUES ('x')",
             "testdb", "test-svc"
         ))
-        assert "error" in result
-        assert "Access denied" in result["error"]
+        assert result["error"]["code"] == "access_denied"
+        assert result["error"]["table"] == "users"
 
     def test_rejects_empty_sql(self):
         from app.tools.pg_tools import db_execute
         result = json.loads(db_execute("", "testdb", "test-svc"))
-        assert "error" in result
+        assert result["error"]["code"] == "invalid_input"
 
 
 class TestDbGetSchema:
@@ -233,8 +232,57 @@ class TestDbGetSchema:
     def test_access_denied_for_table(self):
         from app.tools.pg_tools import db_get_schema
         result = json.loads(db_get_schema("testdb", "test-svc", "forbidden_table"))
-        assert "error" in result
-        assert "Access denied" in result["error"]
+        assert result["error"]["code"] == "access_denied"
+        assert result["error"]["table"] == "forbidden_table"
+
+
+class TestStructuredErrors:
+    """All error responses must follow {"error": {"code": ..., "message": ...}}."""
+
+    def test_every_error_has_code_and_message(self):
+        from app.tools.pg_tools import db_execute, db_get_schema, db_query
+        cases = [
+            db_query("", "testdb", "test-svc"),
+            db_query("SELECT 1", "nope", "test-svc"),
+            db_query("DELETE FROM allowed_table", "testdb", "test-svc"),
+            db_query("SELECT * FROM forbidden_table", "testdb", "test-svc"),
+            db_execute("", "testdb", "test-svc"),
+            db_execute("DROP TABLE x", "testdb", "test-svc"),
+            db_execute("INSERT INTO users (name) VALUES (:n)", "testdb", "test-svc"),
+            db_execute("SELECT 1", "testdb", "test-svc"),
+            db_execute("db_execute bad json", "testdb", "test-svc", "{not json}"),
+            db_get_schema("", "test-svc"),
+            db_get_schema("testdb", "test-svc", "forbidden_table"),
+        ]
+        for raw in cases:
+            result = json.loads(raw)
+            assert "error" in result, raw
+            err = result["error"]
+            assert isinstance(err, dict), f"error must be dict, got {type(err)}: {raw}"
+            assert "code" in err and "message" in err, raw
+
+    def test_ddl_rejected_with_specific_code(self):
+        from app.tools.pg_tools import db_execute, db_query
+        for sql in ("CREATE TABLE x (id int)", "ALTER TABLE t ADD COLUMN c int",
+                    "DROP TABLE t", "TRUNCATE t", "GRANT ALL ON t TO u"):
+            r = json.loads(db_execute(sql, "testdb", "test-svc"))
+            assert r["error"]["code"] == "ddl_forbidden", sql
+            # db_query should also reject DDL
+            r2 = json.loads(db_query(sql, "testdb", "test-svc"))
+            assert r2["error"]["code"] == "ddl_forbidden", sql
+
+    def test_bad_params_json(self):
+        from app.tools.pg_tools import db_query
+        r = json.loads(db_query("SELECT * FROM allowed_table", "testdb", "test-svc",
+                                "{not valid}"))
+        assert r["error"]["code"] == "invalid_input"
+
+    def test_access_denied_extras(self):
+        from app.tools.pg_tools import db_query
+        r = json.loads(db_query("SELECT * FROM forbidden_table", "testdb", "test-svc"))
+        assert r["error"]["code"] == "access_denied"
+        assert r["error"]["table"] == "forbidden_table"
+        assert r["error"]["database"] == "testdb"
 
 
 class TestSqlHelpers:

@@ -1,0 +1,18 @@
+service: doc-reader
+permissions:
+  chat:
+    read:
+      - published_rag_metadata
+      - document_tags
+      - policy_line_tags
+      - policy_lexicon_entries
+    write: []
+  rag:
+    read:
+      - documents
+      - document_pages
+      - hierarchical_chunks
+    write: []
+limits:
+  max_rows: 10000
+  timeout_seconds: 30
