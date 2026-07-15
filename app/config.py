@@ -106,6 +106,13 @@ class DbAgentConfig:
     manifests_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent / "manifests")
     dbt_project_root: Path | None = None
     allow_admin: bool = False
+    # Org doc-store provisioner (instant-RAG vault Appendix B)
+    admin_url: str = ""          # postgres db — CREATE DATABASE
+    org_docs_url: str = ""       # mobius_org_docs
+    org_docs_schema_dir: Path = field(
+        default_factory=lambda: Path(__file__).resolve().parent.parent / "org_docs_schema"
+    )
+    internal_key: str = ""       # X-Internal-Key for service-to-service REST
 
     @classmethod
     def from_env(cls) -> "DbAgentConfig":
@@ -155,10 +162,28 @@ class DbAgentConfig:
 
         allow_admin = os.environ.get("DB_AGENT_ALLOW_ADMIN", "").strip().lower() in ("1", "true", "yes")
 
+        # Org doc-store provisioner. Admin + org-docs URLs derive from the
+        # chat base URL (same instance) unless explicitly overridden.
+        admin_url = normalise_pg_url(
+            (os.environ.get("DB_AGENT_ADMIN_URL") or _derive_url(chat_url, "postgres")).strip()
+        )
+        org_docs_url = normalise_pg_url(
+            (os.environ.get("DB_AGENT_ORG_DOCS_URL") or _derive_url(chat_url, "mobius_org_docs")).strip()
+        )
+        module_dir_ = Path(__file__).resolve().parent.parent
+        schema_dir = Path(
+            os.environ.get("DB_AGENT_ORG_DOCS_SCHEMA_DIR", str(module_dir_ / "org_docs_schema"))
+        )
+        internal_key = os.environ.get("DB_AGENT_INTERNAL_KEY", "").strip()
+
         return cls(
             db_urls=db_urls,
             pool_configs=pool_configs,
             pool_total_max=total_max,
             dbt_project_root=dbt_project_root,
             allow_admin=allow_admin,
+            admin_url=admin_url,
+            org_docs_url=org_docs_url,
+            org_docs_schema_dir=schema_dir,
+            internal_key=internal_key,
         )

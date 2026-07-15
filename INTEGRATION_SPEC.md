@@ -231,3 +231,38 @@ tail -f .mobius_logs/mobius-db-agent.log
 kill $(lsof -ti:8008)
 curl http://localhost:YOUR_PORT/your-endpoint  # should still work via fallback
 ```
+
+## Org doc-store provisioner (REST, not MCP)
+
+The infrastructure leg of instant-RAG's 3-tier visibility model
+(superproject docs/instant-rag-vault-proposal.md Appendix B). Caller in the
+chain: roster/credentialing's `POST /org/{slug}/doc-store/provision`
+delegates here; org-agent onboarding sits above roster.
+
+```
+POST /doc-store/provision        (auth: X-Internal-Key)
+  body     {"org_slug": "sunshine_health", "kind": "shared_namespace"}   # kind optional, v1 default
+  200      {"namespace_ref": "org_sunshine_health", "created": true|false,
+            "status": "ready", "schema_version": 0}
+  400/403/409/503 → {"error": {"code", "message", ...}} (same taxonomy as MCP tools)
+
+GET /doc-store/{org_slug}        (auth: X-Internal-Key; debug/read aid —
+                                  roster's org_doc_store registry is the record)
+```
+
+- **Idempotent create-if-absent.** `created` is authoritative here and must be
+  echoed up unchanged (the "was a new store created" onboarding signal).
+- v1 `kind=shared_namespace`: per-org Postgres schema in the `mobius_org_docs`
+  database (same instance, PUBLIC connect revoked, `mobius_org_docs_rw`
+  umbrella role). `dedicated_db` → 400 until the HIPAA tier.
+- RAG's chunk schema arrives as versioned files in `org_docs_schema/`
+  (see its README); `schema_version` in the response = highest applied for
+  that namespace. Re-provision applies pending versions (fleet upgrade path).
+- **Env:** `DB_AGENT_INTERNAL_KEY` (shared secret; unset = UNAUTHENTICATED
+  dev mode, warned once), `DB_AGENT_ADMIN_URL` / `DB_AGENT_ORG_DOCS_URL`
+  (default: derived from `CHAT_RAG_DATABASE_URL` base),
+  `DB_AGENT_ORG_DOCS_SCHEMA_DIR` (default `org_docs_schema/`).
+  Roster's side: set `INSTANT_RAG_PROVISIONER_URL=http://localhost:8008`
+  (dev) and send the same key in `X-Internal-Key`.
+- Live smoke: `python scripts/smoke_provision.py` (proves create/idempotency/
+  hot-swap/collision-guard against the real DB, cleans up after itself).

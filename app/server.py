@@ -42,3 +42,5 @@ logger.info(
 # Import tools to trigger @mcp.tool() registration
 import app.tools.pg_tools  # noqa: E402, F401
 import app.metrics  # noqa: E402, F401
+# REST routes (org doc-store provisioner) — registers @mcp.custom_route
+import app.routes  # noqa: E402, F401
