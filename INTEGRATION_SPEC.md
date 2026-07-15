@@ -240,10 +240,14 @@ chain: roster/credentialing's `POST /org/{slug}/doc-store/provision`
 delegates here; org-agent onboarding sits above roster.
 
 ```
-POST /doc-store/provision        (auth: X-Internal-Key)
-  body     {"org_slug": "sunshine_health", "kind": "shared_namespace"}   # kind optional, v1 default
+POST /doc-store/provision        (auth: X-Internal-Key)   # THE ratified merged shape
+  body     {"org_slug": "sunshine_health",
+            "kind": "shared_namespace",      # optional, v1 default
+            "schema_version": 1}             # optional ASSERTION (RAG deploy-time sync)
   200      {"namespace_ref": "org_sunshine_health", "created": true|false,
-            "status": "ready", "schema_version": 0}
+            "status": "created"|"already_exists"|"upgraded", "schema_version": 1}
+  409      {"error": {"code": "schema_unavailable", "requested": N, "available": M}}
+           when the caller asserts a version newer than vendored here
   400/403/409/503 → {"error": {"code", "message", ...}} (same taxonomy as MCP tools)
 
 GET /doc-store/{org_slug}        (auth: X-Internal-Key; debug/read aid —
@@ -255,9 +259,12 @@ GET /doc-store/{org_slug}        (auth: X-Internal-Key; debug/read aid —
 - v1 `kind=shared_namespace`: per-org Postgres schema in the `mobius_org_docs`
   database (same instance, PUBLIC connect revoked, `mobius_org_docs_rw`
   umbrella role). `dedicated_db` → 400 until the HIPAA tier.
-- RAG's chunk schema arrives as versioned files in `org_docs_schema/`
-  (see its README); `schema_version` in the response = highest applied for
-  that namespace. Re-provision applies pending versions (fleet upgrade path).
+- RAG's chunk schema is VENDORED into `org_docs_schema/` from
+  `mobius-rag/schemas/org_docs/` via `scripts/sync_org_docs_schema.py`
+  (see the README there); `schema_version` in the response = highest applied
+  for that namespace. Re-provision applies pending versions (fleet upgrade
+  path). Consumers treat `namespace_ref` as OPAQUE — the schema name is NOT
+  the org_slug (it is org_<slug with hyphens folded to underscores>).
 - **Env:** `DB_AGENT_INTERNAL_KEY` (shared secret; unset = UNAUTHENTICATED
   dev mode, warned once), `DB_AGENT_ADMIN_URL` / `DB_AGENT_ORG_DOCS_URL`
   (default: derived from `CHAT_RAG_DATABASE_URL` base),

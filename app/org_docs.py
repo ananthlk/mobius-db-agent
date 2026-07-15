@@ -177,6 +177,15 @@ class OrgDocsProvisioner:
             conn.execute(text(f'REVOKE CONNECT ON DATABASE "{ORG_DOCS_DB}" FROM PUBLIC'))
         with self._org_docs().connect() as conn:
             conn.execute(text(_CONTROL_TABLE_DDL))
+            # pgvector must live at DB level in public — NOT per namespace.
+            # If it were created under a pinned search_path, it would install
+            # into the first org's schema and break vector(1536) resolution
+            # for every other namespace. RAG's per-file CREATE EXTENSION then
+            # no-ops via IF NOT EXISTS.
+            try:
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public"))
+            except Exception as exc:
+                logger.warning("pgvector unavailable on this instance: %s", exc)
             # NOLOGIN umbrella role for org-docs readers/writers; prod service
             # users get membership. Idempotent.
             role_exists = conn.execute(
@@ -198,8 +207,10 @@ class OrgDocsProvisioner:
                 continue
             sql = path.read_text()
             # Namespace-scoped: RAG's files use unqualified names; search_path
-            # pins them to this org's schema.
-            conn.execute(text(f'SET search_path TO "{namespace}"'))
+            # pins them to this org's schema. public stays SECOND in the path
+            # so extension types (vector) resolve while new objects land in
+            # the namespace (CREATE picks the first schema).
+            conn.execute(text(f'SET search_path TO "{namespace}", public'))
             try:
                 conn.execute(text(sql))
             finally:
@@ -210,7 +221,24 @@ class OrgDocsProvisioner:
 
     # -- public API -------------------------------------------------------
 
-    def provision(self, org_slug: str, kind: str = V1_KIND) -> ProvisionResult:
+    def provision(
+        self,
+        org_slug: str,
+        kind: str = V1_KIND,
+        schema_version: int | None = None,
+    ) -> ProvisionResult:
+        """Create-if-absent + apply pending schema versions.
+
+        ``schema_version`` is an optional ASSERTION, not a command: the
+        provisioner always applies every version it has vendored. If the
+        caller asserts a version NEWER than what is vendored here (RAG
+        deployed vN but db-agent still ships vN-1), fail loudly with
+        ``schema_unavailable`` — that drift must block, not silently serve
+        an older schema. Roster omits it; RAG's deploy-time sync passes it.
+
+        Result ``status``: created | already_exists | upgraded.
+        ``created`` (bool) stays the onboarding "new store" signal.
+        """
         slug = validate_slug(org_slug)
         if kind != V1_KIND:
             raise ProvisionError(
@@ -218,6 +246,17 @@ class OrgDocsProvisioner:
                 f"kind '{kind}' not supported in v1 (only '{V1_KIND}'; "
                 "dedicated_db is deferred to the HIPAA tier)",
                 kind=kind,
+            )
+        available = discover_migrations(self._schema_dir)
+        max_available = available[-1][0] if available else 0
+        if schema_version is not None and schema_version > max_available:
+            raise ProvisionError(
+                "schema_unavailable",
+                f"caller asserts org_docs schema v{schema_version} but this "
+                f"provisioner has only v{max_available} vendored — sync "
+                "org_docs_schema/ (scripts/sync_org_docs_schema.py) and redeploy db-agent",
+                requested=schema_version,
+                available=max_available,
             )
         namespace = namespace_for(slug)
 
@@ -251,19 +290,25 @@ class OrgDocsProvisioner:
                     logger.info("provisioned namespace %s for org %s", namespace, slug)
 
                 from_version = 0 if created else int(row[1])
-                schema_version = self._apply_migrations(conn, namespace, from_version)
-                if schema_version != from_version or created:
+                applied_version = self._apply_migrations(conn, namespace, from_version)
+                if applied_version != from_version or created:
                     conn.execute(
                         text(
                             "UPDATE org_docs_namespaces SET schema_version = :v, updated_at = now() "
                             "WHERE org_slug = :s"
                         ),
-                        {"v": schema_version, "s": slug},
+                        {"v": applied_version, "s": slug},
                     )
 
+        if created:
+            status = "created"
+        elif applied_version != from_version:
+            status = "upgraded"
+        else:
+            status = "already_exists"
         return ProvisionResult(
             namespace_ref=namespace, created=created,
-            status="ready", schema_version=schema_version,
+            status=status, schema_version=applied_version,
         )
 
     def get(self, org_slug: str) -> dict | None:

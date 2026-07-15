@@ -16,7 +16,19 @@ Appendix B in the superproject.
 - Never edit a shipped version; add a new `vNNN+1` file.
 - No out-of-band DDL against org namespaces. Everything goes through here.
 
-The directory ships EMPTY (schema_version 0) — the deliberate stub that lets
-the provisioner's DB/namespace/grants leg build and verify ahead of RAG's
-schema v1 (Org Agent go-ahead, 2026-07-15). RAG: drop v001 in and every
-namespace picks it up on next provision.
+**Delivery mechanism (ratified 2026-07-15): VENDORING.** RAG's canonical
+source is `mobius-rag/schemas/org_docs/v{N}/schema.sql`; files here are
+vendored copies produced by `scripts/sync_org_docs_schema.py` (provenance
+header carries the source sha). Never edit vendored files by hand. Rationale:
+the provisioner needs DDL with zero runtime dependency on RAG's repo/service
+(no sibling checkout on Cloud Run; onboarding must survive RAG being down).
+Drift is caught at the contract layer: RAG's deploy-time provision call
+asserts its expected `schema_version`; a provisioner shipping an older copy
+returns 409 `schema_unavailable` instead of silently serving stale DDL.
+
+**v1 is vendored** (org_documents + org_chunks + HNSW cosine + BM25 GIN +
+sentinel table). Two provisioner-side guarantees RAG files rely on:
+`CREATE EXTENSION vector` is handled at DB level in `public` (a per-file
+IF NOT EXISTS no-ops), and files are applied with
+`search_path = "<namespace>", public` so extension types resolve while new
+objects land in the namespace.

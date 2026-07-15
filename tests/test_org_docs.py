@@ -78,3 +78,27 @@ class TestKindGate:
             p.provision("aetna", kind="dedicated_db")
         assert ei.value.code == "invalid_input"
         assert "dedicated_db" in str(ei.value)
+
+
+class TestSchemaVersionAssertion:
+    def _p(self, tmp_path):
+        from app.org_docs import OrgDocsProvisioner
+        return OrgDocsProvisioner(admin_url="", org_docs_url="", schema_dir=tmp_path)
+
+    def test_asserting_newer_than_vendored_fails_before_db_work(self, tmp_path):
+        (tmp_path / "v001_schema.sql").write_text("SELECT 1")
+        with pytest.raises(ProvisionError) as ei:
+            self._p(tmp_path).provision("aetna", schema_version=2)
+        assert ei.value.code == "schema_unavailable"
+        assert ei.value.extra == {"requested": 2, "available": 1}
+
+    def test_asserting_newer_than_empty_stub_fails(self, tmp_path):
+        with pytest.raises(ProvisionError) as ei:
+            self._p(tmp_path).provision("aetna", schema_version=1)
+        assert ei.value.code == "schema_unavailable"
+        assert ei.value.extra["available"] == 0
+
+    def test_kind_gate_still_wins_over_version_check(self, tmp_path):
+        with pytest.raises(ProvisionError) as ei:
+            self._p(tmp_path).provision("aetna", kind="dedicated_db", schema_version=99)
+        assert ei.value.code == "invalid_input"

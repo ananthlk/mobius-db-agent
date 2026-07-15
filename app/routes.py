@@ -31,6 +31,7 @@ _HTTP_BY_CODE = {
     "invalid_input": 400,
     "access_denied": 403,
     "integrity_violation": 409,
+    "schema_unavailable": 409,   # caller asserts a schema newer than vendored
     "connection_error": 503,
     "timeout": 503,
 }
@@ -57,22 +58,30 @@ def _error_response(code: str, message: str, **extra) -> JSONResponse:
 async def provision_doc_store(request: Request) -> JSONResponse:
     """Idempotent create-if-absent of an org's doc-store namespace.
 
-    Body:    {"org_slug": "...", "kind": "shared_namespace"}
-    Returns: {"namespace_ref", "created", "status", "schema_version"}
+    Body:    {"org_slug": "...", "kind": "shared_namespace",
+              "schema_version": N}          # both optional
+    Returns: {"namespace_ref", "created",
+              "status": "created"|"already_exists"|"upgraded",
+              "schema_version"}
     `created` is authoritative here and echoes up through roster to
-    onboarding as the "was a new store created" signal.
+    onboarding as the "was a new store created" signal. `schema_version`
+    in the REQUEST is an assertion (RAG deploy-time sync): asserting a
+    version newer than vendored → 409 schema_unavailable.
     """
     if not _auth_ok(request):
         return _error_response("access_denied", "missing or wrong X-Internal-Key")
     try:
         body = await request.json()
     except Exception:
-        return _error_response("invalid_input", "body must be JSON: {org_slug, kind?}")
+        return _error_response("invalid_input", "body must be JSON: {org_slug, kind?, schema_version?}")
     org_slug = (body.get("org_slug") or "").strip()
     kind = (body.get("kind") or V1_KIND).strip()
+    schema_version = body.get("schema_version")
+    if schema_version is not None and not isinstance(schema_version, int):
+        return _error_response("invalid_input", "schema_version must be an integer when present")
 
     try:
-        result = provisioner.provision(org_slug, kind)
+        result = provisioner.provision(org_slug, kind, schema_version=schema_version)
         return JSONResponse(result.as_dict())
     except ProvisionError as exc:
         return _error_response(exc.code, str(exc), **exc.extra)
